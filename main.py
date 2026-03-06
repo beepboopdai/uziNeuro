@@ -20,12 +20,14 @@ class Transcriber:
         self.worker.start()
 
     def _transcribe(self, audio):
+
+        # our audio is coming in as int16 so we have to make it float32 for whisper
         audio_float = audio.astype(np.float32) / 32768.0
         segments, _ = self.model.transcribe(
             audio_float,
             language="en",
-            beam_size=5,
-            vad_filter=False
+            beam_size=5, # whisper keeps 5 hypotheses in memory
+            vad_filter= # we are using our own vad so leaving this on causes problems
         )
         text = "".join(segment.text for segment in segments).strip()
         
@@ -50,13 +52,13 @@ class Transcriber:
 
 class VAD:
     def __init__(self, transcriber, sample_rate=16000):
-        self.vad = webrtcvad.Vad(2)
+        self.vad = webrtcvad.Vad(2) # goes from 1-3, determines strength of VAD filter
         self.sample_rate = sample_rate
         self.transcriber = transcriber
 
         self.speech_active = False
         self.silence_counter = 0
-        self.SILENCE_LIMIT = 35
+        self.SILENCE_LIMIT = 35 # if no speech for 35 frames, we assume the sentence is done
         self.speech_buffer = []
 
         self.frame_size = 320
@@ -86,9 +88,11 @@ class VAD:
                     self.silence_counter += 1
 
                     if self.silence_counter > self.SILENCE_LIMIT:
+                        # if the sentence is done, we combine all the speech we have in the buffer
                         full_audio = np.concatenate(self.speech_buffer)
-                        self.transcriber.submit(full_audio)
+                        self.transcriber.submit(full_audio) # then we send it to whisper
 
+                        # now we reset everything for next sentence
                         self.speech_buffer = []
                         self.speech_active = False
                         self.silence_counter = 0
@@ -102,7 +106,7 @@ class AudioStream:
         # get native device rate
         device_info = sd.query_devices(device)
         self.native_rate = int(device_info['default_samplerate'])
-        print(f"Device native rate: {self.native_rate}")
+        print(f"device native rate: {self.native_rate}")
 
     def callback(self, indata, frames, time_info, status):
         if status:
@@ -116,7 +120,6 @@ class AudioStream:
                 audio_chunk, 
                 int(len(audio_chunk) * self.sample_rate / self.native_rate)
             )
-        
         self.vad.process_chunk(audio_chunk.reshape(-1, 1))
 
     def start(self):
@@ -206,7 +209,7 @@ class xttsSynthesizer:
 
             audio = self.tts.tts(
                 text=text,
-                speaker="Claribel Dervla",
+                speaker="Claribel Dervla", # TODO: we need to train the uzi voice clone so we don't use this
                 language=self.language
             )
             audio = np.array(audio, dtype=np.float32)
@@ -232,7 +235,7 @@ class Memory:
 
     def _load(self) -> dict:
         try:
-            with open(self.filepath, "r") as f:
+            with open(self.filepath, "r") as f: # read from memory json
                 return json.load(f)
         except FileNotFoundError:
             print ("no memory file found, making a new one")
@@ -257,6 +260,7 @@ class Memory:
         })
 
         try:
+            # write out exchange to memory json
             with open(self.filepath, "w") as f:
                 json.dump(self.data, f, indent=2)
         except IOError as e:
@@ -272,7 +276,8 @@ class Memory:
         return history
     
     def get_facts(self, speaker_id: str = None) -> str:
-        #* returns facts as a string to inject into system prompt
+        #* returns speaker facts as a string to inject into system prompt
+        # TODO: this only works after we implement speaker diarization or manually tag who is speaking
         facts = []
 
         if self.data["shared_facts"]:
@@ -341,6 +346,8 @@ class MainLoop:
         response = self.assistant.chat(text, history)
         print(f"Response: {response}")
         
+        #! we are unfortunately relying on the model to self report if there's a transcription error
+        # TODO: add syntax checks in a func or something so we don't entirely rely on semantics for this
         if "[VAD_ERROR]" in response:
             return
         
