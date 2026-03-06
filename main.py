@@ -36,7 +36,7 @@ class Transcriber:
             audio_float,
             language="en",
             beam_size=5, # whisper keeps 5 hypotheses in memory
-            vad_filter= # we are using our own vad so leaving this on causes problems
+            vad_filter=False# we are using our own vad so leaving this on causes problems
         )
         text = "".join(segment.text for segment in segments).strip()
         
